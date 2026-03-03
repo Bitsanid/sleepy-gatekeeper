@@ -209,4 +209,4 @@ Lihat **ROADMAP.md** untuk timeline detail:
 Pull requests welcome! Fokus pada modular code, error handling graceful, dan vibe "sleepy but powerful". Gunakan PR template untuk agent integrations atau UI enhancements.
 
 Dibuat dengan ❤️ di Jakarta untuk Web4 future.
-
+contact: dev@0x402.tech
