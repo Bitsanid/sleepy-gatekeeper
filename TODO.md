@@ -135,6 +135,6 @@ Update tanggal terakhir: February 28, 2026
 - [ ] Dokumentasikan flow baru di docs/ folder
 - [ ] Tweet progress @bram0511: "Day X: Gatekeeper mulai bangun desktop decentralizednya..."
 
-Mari kerjakan satu per satu — mulai dari wallet login & desktop UI dulu supaya bisa demo cepat.
+Mari kerjakan satu per satu.
 
 Sleepy mode: off. Let's build.
