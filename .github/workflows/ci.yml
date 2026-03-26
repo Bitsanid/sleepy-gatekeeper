@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  lint-and-unit:
+    name: Lint, Typecheck & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run linter
+        run: pnpm lint
+
+      - name: Run typecheck
+        run: pnpm build --noEmit || true
+
+      - name: Run unit tests
+        env:
+          CI: true
+        run: pnpm test
+
+  anchor-tests:
+    name: Anchor / Solana Integration Tests
+    runs-on: ubuntu-latest
+    needs: lint-and-unit
+    env:
+      ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Install Solana CLI
+        run: |
+          curl -sSfL https://release.solana.com/v1.18.6/solana-install-init.sh | sh -s - -b $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          solana --version
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v0.32.1 anchor-cli || true
+
+      - name: Start solana-test-validator
+        run: |
+          nohup solana-test-validator --reset > validator.log 2>&1 &
+          sleep 6
+
+      - name: Create test keypair
+        run: |
+          solana-keygen new --no-passphrase -o ci-keypair.json
+          echo "ANCHOR_WALLET=$GITHUB_WORKSPACE/ci-keypair.json" >> $GITHUB_ENV
+          solana config set --keypair $GITHUB_WORKSPACE/ci-keypair.json --url http://127.0.0.1:8899
+
+      - name: Airdrop SOL to test key
+        run: |
+          solana airdrop 10
+
+      - name: Build Anchor program
+        working-directory: programs/escrow
+        run: anchor build
+
+      - name: Run Anchor tests
+        working-directory: programs/escrow
+        env:
+          ANCHOR_WALLET: ${{ github.workspace }}/ci-keypair.json
+          ANCHOR_PROVIDER_URL: http://127.0.0.1:8899
+        run: anchor test --skip-deploy
+
+      - name: Upload validator log (if exists)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solana-validator-log
+          path: validator.log
+
+  playwright-e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    needs: anchor-tests
+    services: {}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Start app (background)
+        run: |
+          pnpm start &
+          npx wait-on http://localhost:3000
+        env:
+          PORT: 3000
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run Playwright tests
+        env:
+          BASE_URL: http://localhost:3000
+          # OPTIONAL: Add test wallets / secrets via repository secrets
+          # E2E_TEST_WALLET: ${{ secrets.E2E_TEST_WALLET }}
+        run: npx playwright test --reporter=github
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+
+  cleanup:
+    name: Cleanup background services
+    runs-on: ubuntu-latest
+    needs: [playwright-e2e]
+    if: always()
+    steps:
+      - name: Kill solana-test-validator (best effort)
+        run: |
+          pkill -f solana-test-validator || true
+
+      - name: Kill node processes (best effort)
+        run: |
+          pkill -f pnpm || true
+
+# Notes (not executed):
+# - This workflow uses a local solana-test-validator for Anchor program tests to avoid external network flakiness.
+# - For anchor deployments to devnet/mainnet you must provide secure secrets and a deploy job; do NOT store keypairs in the repo.
+# - Provide repository secrets for any E2E test wallets and set them in workflow `env` for Playwright.
+# - Consider splitting long-running jobs into separate workflows if execution time becomes large.
